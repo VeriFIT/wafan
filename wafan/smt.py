@@ -83,7 +83,8 @@ from .regex_conv import UnsupportedPatternError, pcre_to_ecma2020
 from .transforms.html_entity_decode import html_entity_decode_fun_decl
 from .transforms.url_decode import url_decode_fun_decl
 from .transforms.url_decode_uni import url_decode_uni_fun_decl
-
+from .ipmatch import ipmatch_to_regex
+from .validatebyterange import allowed_bytes_to_SMTLIB_regex
 
 SMT_LOGIC = "QF_SLIA"
 
@@ -213,6 +214,8 @@ _TRANSFORMS: dict[str, _TransformDef] = {
                                        fun_decl_builder=url_decode_uni_fun_decl),
     "htmlentitydecode":  _TransformDef(smt_fn="t_htmlEntityDecode",
                                         fun_decl_builder=html_entity_decode_fun_decl),
+    "length":           _TransformDef(smt_fn="t_length",
+        fun_decl="(define-fun t_length ((s String)) String (str.from_int (str.len s)))",),
     "removewhitespace":  _uninterpreted("t_removeWhitespace",   *_REMOVE_WS_AXIOMS),
     "compresswhitespace":_uninterpreted("t_compressWhitespace", *_COMPRESS_WS_AXIOMS),
     "removenulls":       _uninterpreted("t_removeNulls",        *_REMOVE_NULLS_AXIOMS),
@@ -621,6 +624,39 @@ def _op_pm(var_expr: str, argument: str, negated: bool) -> str:
     # var_expr.
     return _op_pm_phrases(var_expr, argument.split(), negated)
 
+def _op_ipmatch(var_expr: str, argument: str, negated: bool) -> str:
+    #@ipMatch: matches if var_expr is included in the list of the IP addresses or is included in the range
+
+    try:
+        #the @ipMatch argument is transformed to a corresponding regex
+        regex = ipmatch_to_regex(argument)
+    except ValueError as exc:
+        raise UnsupportedOperatorError(
+            f"@ipMatch argument '{argument}' is not supported: {exc}"
+        ) from exc
+
+    #if the @ipMatch string was empty, ModSecurity treats it as 'the rule is never matched' (false)
+    if regex is None:
+        return _wrap_negated("false", negated)
+    
+    #create the regex assertion
+    return _rx_assertion(var_expr, regex, negated)
+
+def _op_validatebyterange(var_expr: str, argument: str, negated: bool) -> str:
+    #@validateByteRange: matches if var_expr contains at least 1 byte that WAS NOT allowed in the list
+    #e.g. detecting and not allowing NULL bytes:
+    #SecRule ARGS "@validateByteRange 1-255" "id:2000"
+
+    try:
+        #SMT-lib regex for allowed bytes
+        allowed_regex = allowed_bytes_to_SMTLIB_regex(argument, var_expr)
+    except ValueError as exc:
+        raise UnsupportedOperatorError(
+            f"@validateByteRange argument '{argument}' is not supported: {exc}"
+        ) from exc
+
+    #if this is not true (at least 1 var_expr byte is not allowed), the rule matches
+    return _wrap_negated(f"(not {allowed_regex})", negated)
 
 # ---------------------------------------------------------------------------
 # @pmFromFile / @pmf
@@ -699,6 +735,8 @@ _OPERATORS: dict[str, Callable[[str, str, bool], str]] = {
     "endswith": _op_endswith,
     "within": _op_within,
     "pm": _op_pm,
+    "ipmatch": _op_ipmatch,
+    "validatebyterange": _op_validatebyterange,
     **{name: _make_numeric_op(smt_op) for name, smt_op in _NUMERIC_OPS.items()},
 }
 

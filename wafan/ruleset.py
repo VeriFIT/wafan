@@ -274,6 +274,36 @@ class Directive:
 
         return _chain_label(self.chain, pat_width=50)
 
+    @property
+    def tags(self) -> list[str]:
+        """Tags this directive has."""
+
+        #if the directive is a chain, ModSecurity would ignore the tags of other rules than of the first rule in this chain sequence 
+        #("the chain starter")
+        if self.chain:
+            source = self.chain[0].actions
+        else:
+            source = self.actions
+        
+        tags_list = []
+        for action in source:
+            if action.name == "tag":
+                tag = action.arg.strip().strip("'\"")
+                tags_list.append(tag)
+                
+        return tags_list
+
+    @property
+    def removes_tags(self) -> list[str]:
+        """Tags that are disabled by ctl:ruleRemoveByTag of this directive."""
+
+        tags_to_remove = []
+        for action in self.actions:
+            #ctl:ruleRemoveByTag with a value
+            if action.name == "ctl" and action.arg == "ruleRemoveByTag" and action.arg_value.strip():
+                tag = action.arg_value.strip().strip("'\"")
+                tags_to_remove.append(tag)
+        return tags_to_remove
 
 # ---------------------------------------------------------------------------
 # Parsing
@@ -480,6 +510,13 @@ def resolve_control_flow(
         if d.kind != "marker" and d.rule_id:
             id_positions.setdefault(d.rule_id, []).append(pos)
 
+    tag_positions: dict[str, list[int]] = {}
+    for pos, d in enumerate(order):
+        if d.kind == "marker":
+            continue
+        for tag in d.tags:
+            tag_positions.setdefault(tag, []).append(pos)
+
     for pos, d in enumerate(order):
         if d.kind == "marker":
             continue
@@ -511,6 +548,16 @@ def resolve_control_flow(
             for k in id_positions.get(rid, []):
                 if k > pos:
                     blocked[k].append(pos)
+
+        #every directive that carries 1 of the removed tags
+        removed_by_tag: set[int] = set()
+        for tag in d.removes_tags:
+            removed_by_tag.update(tag_positions.get(tag, []))
+
+        #the directive must run later than this directive
+        for k in sorted(removed_by_tag):
+            if k > pos:
+                blocked[k].append(pos)
 
     return ControlFlow(blocked_by=blocked, terminators=terminators)
 

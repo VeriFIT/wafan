@@ -1,3 +1,0 @@
-[console_scripts]
-wafan = wafan.__main__:main
-wafan-download-solver = wafan.solver_setup:download_solver_cli

@@ -134,6 +134,17 @@ class TestParseDirectives:
         """)
         assert parse_directives(conf)[0].removes_targets is True
 
+    def test_ctl_rule_remove_by_tag(self, tmp_path):
+        conf = write_conf(tmp_path, """
+            SecAction "id:1,phase:2,pass,ctl:ruleRemoveByTag=attack-sqli"
+        """)
+        assert by_id(parse_directives(conf), "1").removes_tags == ["attack-sqli"]
+
+    def test_tags_are_read_from_rule(self, tmp_path):
+        conf = write_conf(tmp_path, """
+            SecRule ARGS "@streq a" "id:1,phase:2,deny,tag:'attack-sqli',tag:'attack-xss'"
+        """)
+        assert by_id(parse_directives(conf), "1").tags == ["attack-sqli", "attack-xss"]
 
 # ---------------------------------------------------------------------------
 # Termination
@@ -303,6 +314,61 @@ class TestControlFlow:
         pos = {d.rule_id: i for i, d in enumerate(rs.order) if d.kind != "marker"}
         assert cf.terminators == [pos["1"]]
 
+    def test_ctl_remove_by_tag_blocks_later_tagged_rules(self, tmp_path):
+        rs, cf = self._cf(tmp_path, """
+            SecRule ARGS "@streq a" "id:10,phase:2,deny,tag:'attack-sqli'"
+            SecAction "id:1,phase:2,pass,ctl:ruleRemoveByTag=attack-sqli"
+            SecRule ARGS "@streq b" "id:2,phase:2,deny,tag:'attack-sqli'"
+            SecRule ARGS "@streq c" "id:3,phase:2,deny,tag:'attack-xss'"
+            SecRule ARGS "@streq d" "id:4,phase:2,deny,tag:'attack-sqli',tag:'attack-xss'"
+        """)
+        pos = {d.rule_id: i for i, d in enumerate(rs.order) if d.kind != "marker"}
+        assert cf.blocked_by[pos["10"]] == []
+        assert cf.blocked_by[pos["2"]] == [pos["1"]]
+        assert cf.blocked_by[pos["3"]] == []
+        assert cf.blocked_by[pos["4"]] == [pos["1"]]
+
+    def test_ctl_remove_by_unknown_tag_blocks_nothing(self, tmp_path):
+        rs, cf = self._cf(tmp_path, """
+            SecAction "id:1,phase:2,pass,ctl:ruleRemoveByTag=nonexistent"
+            SecRule ARGS "@streq a" "id:2,phase:2,deny,tag:'attack-sqli'"
+        """)
+        pos = {d.rule_id: i for i, d in enumerate(rs.order) if d.kind != "marker"}
+        assert cf.blocked_by[pos["2"]] == []
+
+    def test_ctl_remove_by_tag_crosses_phases(self, tmp_path):
+        rs, cf = self._cf(tmp_path, """
+            SecAction "id:1,phase:1,pass,ctl:ruleRemoveByTag=attack-sqli"
+            SecRule ARGS "@streq a" "id:2,phase:2,deny,tag:'attack-sqli'"
+        """)
+        pos = {d.rule_id: i for i, d in enumerate(rs.order) if d.kind != "marker"}
+        assert cf.blocked_by[pos["2"]] == [pos["1"]]
+
+    def test_ctl_remove_by_tag_does_not_block_earlier_rule(self, tmp_path):
+        rs, cf = self._cf(tmp_path, """
+            SecRule ARGS "@streq a" "id:2,phase:2,deny,tag:'attack-sqli'"
+            SecAction "id:1,phase:2,pass,ctl:ruleRemoveByTag=attack-sqli"
+        """)
+        pos = {d.rule_id: i for i, d in enumerate(rs.order) if d.kind != "marker"}
+        assert cf.blocked_by[pos["2"]] == []
+
+    def test_ctl_remove_by_tag_is_literal_not_regex(self, tmp_path):
+        # ModSecurity v3 compares the tag literally (v2 used a regular expression)
+        rs, cf = self._cf(tmp_path, """
+            SecAction "id:1,phase:2,pass,ctl:ruleRemoveByTag=attack-.*"
+            SecRule ARGS "@streq a" "id:2,phase:2,deny,tag:'attack-sqli'"
+        """)
+        pos = {d.rule_id: i for i, d in enumerate(rs.order) if d.kind != "marker"}
+        assert cf.blocked_by[pos["2"]] == []
+
+    def test_tags_taken_only_from_chain_starter(self, tmp_path):
+        rs, cf = self._cf(tmp_path, """
+            SecAction "id:1,phase:2,pass,ctl:ruleRemoveByTag=attack-xss"
+            SecRule ARGS "@streq a" "id:2,phase:2,deny,tag:'attack-sqli',chain"
+                SecRule REQUEST_METHOD "@streq POST" "tag:'attack-xss'"
+        """)
+        pos = {d.rule_id: i for i, d in enumerate(rs.order) if d.kind != "marker"}
+        assert cf.blocked_by[pos["2"]] == []
 
 class TestSetvarWriters:
     def test_writers_indexed_by_key(self, tmp_path):

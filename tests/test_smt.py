@@ -494,6 +494,40 @@ class TestNumericOperators:
         with pytest.raises(UnsupportedOperatorError):
             rule_to_smt(make_rule(var_name="ARGS", pattern="not-a-number", operator="@eq"))
 
+class TestIpMatchOperator:
+    def test_assert_uses_regex(self):
+        f = rule_to_smt(make_rule(var_name="REMOTE_ADDR", pattern="10.0.0.0/8", operator="@ipMatch"))
+        assert "(str.in_re REMOTE_ADDR (re.from_ecma2020" in f.assertion
+
+    def test_negated(self):
+        f = rule_to_smt(make_rule(var_name="REMOTE_ADDR", pattern="10.0.0.0/8", operator="!@ipMatch"))
+        assert f.assertion.startswith("(not (str.in_re REMOTE_ADDR")
+
+    def test_empty_argument_never_matches(self):
+        f = rule_to_smt(make_rule(var_name="REMOTE_ADDR", pattern="", operator="@ipMatch"))
+        assert f.assertion == "false"
+
+    def test_invalid_argument_raises(self):
+        with pytest.raises(UnsupportedOperatorError):
+            rule_to_smt(make_rule(var_name="REMOTE_ADDR", pattern="10.0.0.0/33", operator="@ipMatch"))
+
+
+class TestLengthTransform:
+    def test_assert_uses_t_length(self):
+        f = rule_to_smt(make_rule(var_name="ARGS", pattern="5", operator="@gt", transforms=["length"]))
+        assert "(t_length ARGS)" in f.assertion
+
+    def test_define_fun_no_axioms(self):
+        f = rule_to_smt(make_rule(var_name="ARGS", pattern="5", operator="@gt", transforms=["length"]))
+        assert f.fun_declarations == ["(define-fun t_length ((s String)) String (str.from_int (str.len s)))"]
+        assert f.axioms == []
+
+    def test_numeric_comparison_of_length(self):
+        f = rule_to_smt(make_rule(var_name="ARGS", pattern="5", operator="@gt", transforms=["length"]))
+        assert f.assertion == (
+            '(and (str.in_re (t_length ARGS) (re.+ (re.range "0" "9"))) '
+            '(> (str.to_int (t_length ARGS)) 5))'
+        )
 
 # ---------------------------------------------------------------------------
 # rules_to_smt

@@ -5,3 +5,4 @@ __pycache__
 .vscode
 owasp-rules
 build
+wafan.egg-info/
